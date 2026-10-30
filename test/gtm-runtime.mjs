@@ -81,6 +81,13 @@ export const APIS = {
     () => true,
   ],
   logToConsole: [(perms) => (perms.logging ? null : 'logging not declared'), () => undefined],
+  setInWindow: [
+    (perms, [key]) =>
+      (perms.access_globals?.keys || []).some((k) => k.key === key && k.write === true)
+        ? null
+        : `access_globals write not declared for ${key}`,
+    () => true,
+  ],
 };
 
 export const API_PERMISSION = {
@@ -90,6 +97,7 @@ export const API_PERMISSION = {
   injectScript: 'inject_script',
   isConsentGranted: 'access_consent',
   logToConsole: 'logging',
+  setInWindow: 'access_globals',
 };
 
 class AssertionFailure extends Error {}

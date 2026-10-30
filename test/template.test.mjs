@@ -82,10 +82,15 @@ describe('permissions match the code', () => {
     for (const c of declared) assert.deepEqual([c.read, c.write], [true, false]);
   });
 
-  it('executes only the window functions the code calls', () => {
-    const paths = [...code.matchAll(/callInWindow\('([^']+)'/g)].map((m) => m[1]);
-    assert.deepEqual(permissions.access_globals.keys.map((k) => k.key), paths);
-    for (const k of permissions.access_globals.keys) assert.deepEqual([k.read, k.write, k.execute], [false, false, true]);
+  it('writes and executes only the window globals the code uses', () => {
+    const executed = [...code.matchAll(/callInWindow\('([^']+)'/g)].map((m) => m[1]);
+    const written = [...code.matchAll(/setInWindow\('([^']+)'/g)].map((m) => m[1]);
+    const expected = [
+      ...[...new Set(written)].map((key) => [key, false, true, false]),
+      ...[...new Set(executed)].map((key) => [key, false, false, true]),
+    ];
+    const declared = permissions.access_globals.keys.map((k) => [k.key, k.read, k.write, k.execute]);
+    assert.deepEqual(declared.sort(), expected.sort());
   });
 
   it('logs only in debug mode', () => {

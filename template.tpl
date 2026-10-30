@@ -104,6 +104,7 @@ const encodeUriComponent = require('encodeUriComponent');
 const injectScript = require('injectScript');
 const isConsentGranted = require('isConsentGranted');
 const logToConsole = require('logToConsole');
+const setInWindow = require('setInWindow');
 
 const LOG_PREFIX = 'Delivr.ai pixel: ';
 
@@ -136,21 +137,26 @@ if (data.respectConsent === false) {
 }
 
 const consentType = data.consentType || 'ad_storage';
+const granted = isConsentGranted(consentType);
 
-if (isConsentGranted(consentType)) {
+// The SDK reads this page-wide flag live, so it covers every Delivr pixel on
+// the page and a script that finishes loading after a withdrawal. Set it
+// before injecting so the SDK starts in consent-aware mode.
+setInWindow('__delivrPixelConsent', granted, true);
+
+if (granted) {
   load(data.gtmOnSuccess, data.gtmOnFailure);
 } else {
   logToConsole(LOG_PREFIX + 'waiting for ' + consentType + ' consent');
   data.gtmOnSuccess();
 }
 
-// The SDK has no re-enable, so a withdrawal holds until the next page load.
-addConsentListener(consentType, function (type, granted) {
-  if (granted) {
+addConsentListener(consentType, function (type, nowGranted) {
+  logToConsole(LOG_PREFIX + type + (nowGranted ? ' granted' : ' withdrawn'));
+  setInWindow('__delivrPixelConsent', nowGranted, true);
+  callInWindow('PixelSDK.setConsent', nowGranted);
+  if (nowGranted) {
     load(noop, noop);
-  } else {
-    logToConsole(LOG_PREFIX + type + ' withdrawn, pixel disabled for this page');
-    callInWindow('PixelSDK.disable');
   }
 });
 
@@ -386,7 +392,46 @@ ___WEB_PERMISSIONS___
                 "mapValue": [
                   {
                     "type": 1,
-                    "string": "PixelSDK.disable"
+                    "string": "__delivrPixelConsent"
+                  },
+                  {
+                    "type": 8,
+                    "boolean": false
+                  },
+                  {
+                    "type": 8,
+                    "boolean": true
+                  },
+                  {
+                    "type": 8,
+                    "boolean": false
+                  }
+                ]
+              },
+              {
+                "type": 3,
+                "mapKey": [
+                  {
+                    "type": 1,
+                    "string": "key"
+                  },
+                  {
+                    "type": 1,
+                    "string": "read"
+                  },
+                  {
+                    "type": 1,
+                    "string": "write"
+                  },
+                  {
+                    "type": 1,
+                    "string": "execute"
+                  }
+                ],
+                "mapValue": [
+                  {
+                    "type": 1,
+                    "string": "PixelSDK.setConsent"
                   },
                   {
                     "type": 8,
@@ -418,15 +463,19 @@ ___WEB_PERMISSIONS___
 ___TESTS___
 
 scenarios:
-- name: Consent granted loads the pixel
+- name: Consent granted sets the page flag, then loads the pixel
   code: |-
     let injectedUrl;
     let injectedToken;
+    let flagAtInjection;
+    let flag;
     mock('isConsentGranted', function (type) { return type === 'ad_storage'; });
     mock('addConsentListener', function () {});
+    mock('setInWindow', function (key, value) { flag = value; });
     mock('injectScript', function (url, onSuccess, onFailure, token) {
       injectedUrl = url;
       injectedToken = token;
+      flagAtInjection = flag;
       onSuccess();
     });
 
@@ -434,26 +483,32 @@ scenarios:
 
     assertThat(injectedUrl).isEqualTo('https://cdn.delivr.ai/pixels/6f01f886-7e01-4f4b-8c78-09051afd02c7/p.js');
     assertThat(injectedToken).isEqualTo('delivr-pixel-6f01f886-7e01-4f4b-8c78-09051afd02c7');
+    assertThat(flagAtInjection).isTrue();
+    assertApi('setInWindow').wasCalledWith('__delivrPixelConsent', true, true);
     assertApi('gtmOnSuccess').wasCalled();
     assertApi('gtmOnFailure').wasNotCalled();
-- name: Consent denied waits without loading and still completes the tag
+- name: Consent denied sets the page flag false and waits without loading
   code: |-
     mock('isConsentGranted', function () { return false; });
     mock('addConsentListener', function () {});
+    mock('setInWindow', function () {});
     mock('injectScript', function () { fail('injectScript must not run before consent'); });
 
     runCode(mockData);
 
+    assertApi('setInWindow').wasCalledWith('__delivrPixelConsent', false, true);
     assertApi('injectScript').wasNotCalled();
     assertApi('addConsentListener').wasCalled();
     assertApi('gtmOnSuccess').wasCalled();
     assertApi('gtmOnFailure').wasNotCalled();
-- name: A later grant loads the pixel
+- name: A later grant sets the page flag and loads the pixel
   code: |-
     let listener;
     let injectedUrl;
     mock('isConsentGranted', function () { return false; });
     mock('addConsentListener', function (type, fn) { listener = fn; });
+    mock('setInWindow', function () {});
+    mock('callInWindow', function () {});
     mock('injectScript', function (url, onSuccess) {
       injectedUrl = url;
       onSuccess();
@@ -463,23 +518,61 @@ scenarios:
     listener('ad_storage', true);
 
     assertThat(injectedUrl).isEqualTo('https://cdn.delivr.ai/pixels/6f01f886-7e01-4f4b-8c78-09051afd02c7/p.js');
-    assertApi('callInWindow').wasNotCalled();
-- name: Withdrawing consent disables the pixel
+    assertApi('setInWindow').wasCalledWith('__delivrPixelConsent', true, true);
+    assertApi('callInWindow').wasCalledWith('PixelSDK.setConsent', true);
+- name: Withdrawing consent clears the page flag and tells the SDK
   code: |-
     let listener;
+    let flag;
     mock('isConsentGranted', function () { return true; });
     mock('addConsentListener', function (type, fn) { listener = fn; });
-    mock('injectScript', function (url, onSuccess) { onSuccess(); });
+    mock('setInWindow', function (key, value) { flag = value; });
     mock('callInWindow', function () {});
+    mock('injectScript', function (url, onSuccess) { onSuccess(); });
 
     runCode(mockData);
     listener('ad_storage', false);
 
-    assertApi('callInWindow').wasCalledWith('PixelSDK.disable');
+    assertThat(flag).isFalse();
+    assertApi('callInWindow').wasCalledWith('PixelSDK.setConsent', false);
+    assertApi('callInWindow').wasNotCalledWith('PixelSDK.setConsent', true);
+- name: A withdrawal while the script is loading is in place before it finishes
+  code: |-
+    let listener;
+    let finishLoading;
+    let flag;
+    mock('isConsentGranted', function () { return true; });
+    mock('addConsentListener', function (type, fn) { listener = fn; });
+    mock('setInWindow', function (key, value) { flag = value; });
+    mock('callInWindow', function () {});
+    mock('injectScript', function (url, onSuccess) { finishLoading = onSuccess; });
+
+    runCode(mockData);
+    listener('ad_storage', false);
+    finishLoading();
+
+    assertThat(flag).isFalse();
+- name: A withdrawal covers every pixel tag on the page
+  code: |-
+    const listeners = [];
+    let flag;
+    mock('isConsentGranted', function () { return true; });
+    mock('addConsentListener', function (type, fn) { listeners.push(fn); });
+    mock('setInWindow', function (key, value) { flag = value; });
+    mock('callInWindow', function () {});
+    mock('injectScript', function (url, onSuccess) { onSuccess(); });
+
+    runCode(mockData);
+    runCode({pixelId: '6f01f886-7e01-4f4b-8c78-09051afd02c8', respectConsent: true, consentType: 'ad_storage'});
+    listeners[1]('ad_storage', false);
+
+    assertThat(listeners.length).isEqualTo(2);
+    assertThat(flag).isFalse();
 - name: Consent checks off loads immediately and registers no listener
   code: |-
     mock('isConsentGranted', function () { return false; });
     mock('addConsentListener', function () { fail('no listener expected'); });
+    mock('setInWindow', function () { fail('the page flag is left alone'); });
     mock('injectScript', function (url, onSuccess) { onSuccess(); });
 
     runCode({pixelId: mockData.pixelId, respectConsent: false});
