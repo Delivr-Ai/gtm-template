@@ -83,13 +83,14 @@ export const APIS = {
   logToConsole: [(perms) => (perms.logging ? null : 'logging not declared'), () => undefined],
   setInWindow: [
     (perms, [key]) =>
-      (perms.access_globals?.keys || []).some((k) => k.key === key && k.write === true)
+      // GTM checks readwrite, not write alone, as the editor's runtime showed.
+      (perms.access_globals?.keys || []).some((k) => k.key === key && k.read === true && k.write === true)
         ? null
-        : `access_globals write not declared for ${key}`,
+        : `access_globals readwrite not declared for ${key}`,
     () => true,
   ],
   // An object rather than a function; runScenario hands out one per page.
-  templateStorage: [() => null, () => undefined],
+  templateStorage: [(perms) => (perms.access_template_storage ? null : 'access_template_storage not declared'), () => undefined],
 };
 
 export const API_PERMISSION = {
@@ -100,7 +101,7 @@ export const API_PERMISSION = {
   isConsentGranted: 'access_consent',
   logToConsole: 'logging',
   setInWindow: 'access_globals',
-  templateStorage: null,
+  templateStorage: 'access_template_storage',
 };
 
 class AssertionFailure extends Error {}
@@ -137,7 +138,12 @@ export function runScenario({ code, permissions, scenarioCode, setupCode = '' })
 
   const requireApi = (name) => {
     if (!(name in APIS)) throw new Error(`require of unsupported API ${name}`);
-    return name === 'templateStorage' ? templateStorage : sandboxed(name);
+    if (name === 'templateStorage') {
+      const denied = APIS.templateStorage[0](permissions, []);
+      if (denied) throw new Error(`permission denied: ${denied}`);
+      return templateStorage;
+    }
+    return sandboxed(name);
   };
 
   const callback = (name) => (...args) => record(name, args);
