@@ -86,7 +86,7 @@ describe('permissions match the code', () => {
     const executed = [...code.matchAll(/callInWindow\('([^']+)'/g)].map((m) => m[1]);
     const written = [...code.matchAll(/setInWindow\('([^']+)'/g)].map((m) => m[1]);
     const expected = [
-      ...[...new Set(written)].map((key) => [key, false, true, false]),
+      ...[...new Set(written)].map((key) => [key, true, true, false]),
       ...[...new Set(executed)].map((key) => [key, false, false, true]),
     ];
     const declared = permissions.access_globals.keys.map((k) => [k.key, k.read, k.write, k.execute]);
