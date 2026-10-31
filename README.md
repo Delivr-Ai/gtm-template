@@ -18,7 +18,7 @@ With **Wait for Google Consent Mode consent** checked (the default), the tag:
 - waits and loads it as soon as consent is granted later in the page view;
 - stops the pixel sending if consent is withdrawn, including a withdrawal that lands while the script is still loading, and resumes it on a later grant.
 
-The decision applies to every Delivr.ai pixel on the page: the template mirrors Consent Mode into the page-wide `window.__delivrPixelConsent` flag, which the pixel reads before every send.
+The decision applies to every Delivr.ai pixel on the page: the template mirrors Consent Mode into the page-wide `window.__delivrPixelConsent` flag, which the pixel reads before every send. If tags on the same page wait for different consent types, the pixel sends only while every one of them is granted.
 
 A site that never sets Consent Mode reads as granted, so the pixel loads as it would from a Custom HTML tag. Your consent platform must publish its decisions to Consent Mode for this to take effect.
 

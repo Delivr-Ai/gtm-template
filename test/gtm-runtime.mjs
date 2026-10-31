@@ -88,6 +88,8 @@ export const APIS = {
         : `access_globals write not declared for ${key}`,
     () => true,
   ],
+  // An object rather than a function; runScenario hands out one per page.
+  templateStorage: [() => null, () => undefined],
 };
 
 export const API_PERMISSION = {
@@ -98,6 +100,7 @@ export const API_PERMISSION = {
   isConsentGranted: 'access_consent',
   logToConsole: 'logging',
   setInWindow: 'access_globals',
+  templateStorage: null,
 };
 
 class AssertionFailure extends Error {}
@@ -123,9 +126,18 @@ export function runScenario({ code, permissions, scenarioCode, setupCode = '' })
     return fallback(...args);
   };
 
+  // One storage per scenario: every runCode in it is a tag on the same page.
+  const stored = new Map();
+  const templateStorage = {
+    getItem: (key) => stored.get(key),
+    setItem: (key, value) => void stored.set(key, value),
+    removeItem: (key) => void stored.delete(key),
+    clear: () => stored.clear(),
+  };
+
   const requireApi = (name) => {
     if (!(name in APIS)) throw new Error(`require of unsupported API ${name}`);
-    return sandboxed(name);
+    return name === 'templateStorage' ? templateStorage : sandboxed(name);
   };
 
   const callback = (name) => (...args) => record(name, args);

@@ -105,6 +105,7 @@ const injectScript = require('injectScript');
 const isConsentGranted = require('isConsentGranted');
 const logToConsole = require('logToConsole');
 const setInWindow = require('setInWindow');
+const templateStorage = require('templateStorage');
 
 const LOG_PREFIX = 'Delivr.ai pixel: ';
 
@@ -137,25 +138,44 @@ if (data.respectConsent === false) {
 }
 
 const consentType = data.consentType || 'ad_storage';
-const granted = isConsentGranted(consentType);
+
+// Every Delivr tag on the page shares one flag, so it is granted only while
+// every consent type any of them requires is granted.
+const requiredTypes = templateStorage.getItem('consentTypes') || [];
+if (requiredTypes.indexOf(consentType) === -1) {
+  requiredTypes.push(consentType);
+  templateStorage.setItem('consentTypes', requiredTypes);
+}
+
+function pageGranted() {
+  const types = templateStorage.getItem('consentTypes') || [];
+  for (let i = 0; i < types.length; i++) {
+    if (!isConsentGranted(types[i])) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // The SDK reads this page-wide flag live, so it covers every Delivr pixel on
 // the page and a script that finishes loading after a withdrawal. Set it
 // before injecting so the SDK starts in consent-aware mode.
+const granted = pageGranted();
 setInWindow('__delivrPixelConsent', granted, true);
 
 if (granted) {
   load(data.gtmOnSuccess, data.gtmOnFailure);
 } else {
-  logToConsole(LOG_PREFIX + 'waiting for ' + consentType + ' consent');
+  logToConsole(LOG_PREFIX + 'waiting for consent');
   data.gtmOnSuccess();
 }
 
 addConsentListener(consentType, function (type, nowGranted) {
+  const allGranted = nowGranted && pageGranted();
   logToConsole(LOG_PREFIX + type + (nowGranted ? ' granted' : ' withdrawn'));
-  setInWindow('__delivrPixelConsent', nowGranted, true);
-  callInWindow('PixelSDK.setConsent', nowGranted);
-  if (nowGranted) {
+  setInWindow('__delivrPixelConsent', allGranted, true);
+  callInWindow('PixelSDK.setConsent', allGranted);
+  if (allGranted) {
     load(noop, noop);
   }
 });
@@ -505,7 +525,8 @@ scenarios:
   code: |-
     let listener;
     let injectedUrl;
-    mock('isConsentGranted', function () { return false; });
+    let adStorage = false;
+    mock('isConsentGranted', function () { return adStorage; });
     mock('addConsentListener', function (type, fn) { listener = fn; });
     mock('setInWindow', function () {});
     mock('callInWindow', function () {});
@@ -515,6 +536,7 @@ scenarios:
     });
 
     runCode(mockData);
+    adStorage = true;
     listener('ad_storage', true);
 
     assertThat(injectedUrl).isEqualTo('https://cdn.delivr.ai/pixels/6f01f886-7e01-4f4b-8c78-09051afd02c7/p.js');
@@ -568,6 +590,41 @@ scenarios:
 
     assertThat(listeners.length).isEqualTo(2);
     assertThat(flag).isFalse();
+- name: A tag requiring another consent type keeps the page flag denied
+  code: |-
+    const states = {ad_storage: true, analytics_storage: true};
+    const listeners = {};
+    let flag;
+    let sdkConsent;
+    mock('isConsentGranted', function (type) { return states[type]; });
+    mock('addConsentListener', function (type, fn) { listeners[type] = fn; });
+    mock('setInWindow', function (key, value) { flag = value; });
+    mock('callInWindow', function (path, value) { sdkConsent = value; });
+    mock('injectScript', function (url, onSuccess) { onSuccess(); });
+
+    runCode(mockData);
+    runCode({pixelId: '6f01f886-7e01-4f4b-8c78-09051afd02c8', respectConsent: true, consentType: 'analytics_storage'});
+    states.ad_storage = false;
+    listeners.ad_storage('ad_storage', false);
+    states.analytics_storage = false;
+    listeners.analytics_storage('analytics_storage', false);
+    states.analytics_storage = true;
+    listeners.analytics_storage('analytics_storage', true);
+
+    assertThat(flag).isFalse();
+    assertThat(sdkConsent).isFalse();
+- name: A tag registered while another type is denied waits
+  code: |-
+    const states = {ad_storage: false, analytics_storage: true};
+    mock('isConsentGranted', function (type) { return states[type]; });
+    mock('addConsentListener', function () {});
+    mock('setInWindow', function () {});
+    mock('injectScript', function () { fail('nothing loads while ad_storage is denied'); });
+
+    runCode(mockData);
+    runCode({pixelId: '6f01f886-7e01-4f4b-8c78-09051afd02c8', respectConsent: true, consentType: 'analytics_storage'});
+
+    assertApi('setInWindow').wasNotCalledWith('__delivrPixelConsent', true, true);
 - name: Consent checks off loads immediately and registers no listener
   code: |-
     mock('isConsentGranted', function () { return false; });
