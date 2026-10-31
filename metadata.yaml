@@ -1,0 +1,6 @@
+homepage: "https://delivr.ai"
+documentation: "https://docs.delivr.ai/docs/install-with-google-tag-manager"
+versions:
+  - sha: e8171287a2495e29128be28fa1d308aa54f38588
+    changeNotes: |2
+      Initial release. Loads the Delivr.ai pixel and follows Google Consent Mode.

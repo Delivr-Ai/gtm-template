@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { parse as parseYaml } from 'yaml';
+import { execFileSync } from 'node:child_process';
 
 import { API_PERMISSION, APIS, parsePermissions, parseSections, runScenario } from './gtm-runtime.mjs';
 
@@ -19,6 +20,26 @@ const GALLERY_CATEGORIES = new Set([
   'EMAIL_MARKETING', 'EXPERIMENTATION', 'HEAT_MAP', 'LEAD_GENERATION', 'MARKETING', 'PERSONALIZATION',
   'REMARKETING', 'SALES', 'SESSION_RECORDING', 'SOCIAL', 'SURVEY', 'TAG_MANAGEMENT', 'UTILITY',
 ]);
+
+const git = (...args) => execFileSync('git', args, { cwd: new URL('..', import.meta.url), encoding: 'utf8' }).trim();
+const isCommit = (sha) => {
+  try {
+    return git('cat-file', '-t', sha) === 'commit';
+  } catch {
+    return false;
+  }
+};
+const isAncestor = (older, newer) => {
+  try {
+    git('merge-base', '--is-ancestor', older, newer);
+    return true;
+  } catch {
+    return false;
+  }
+};
+// Each entry must be a strict ancestor of the one listed above it.
+const newestFirst = (shas) => shas.every((sha, i) => i === 0 || (sha !== shas[i - 1] && isAncestor(sha, shas[i - 1])));
+const templateCommits = () => git('log', '--format=%H', '--reverse', '--', 'template.tpl').split('\n');
 
 const param = (name) => params.find((p) => p.name === name);
 const required = [...code.matchAll(/require\('([^']+)'\)/g)].map((m) => m[1]);
@@ -129,6 +150,29 @@ describe('the harness itself', () => {
 });
 
 describe('gallery files', () => {
+  it('has gallery metadata: https homepage and docs, and full commit SHAs', () => {
+    const metadata = parseYaml(readFileSync(new URL('metadata.yaml', root), 'utf8'));
+    assert.match(metadata.homepage, /^https:\/\//);
+    assert.match(metadata.documentation, /^https:\/\//);
+    assert.ok(Array.isArray(metadata.versions) && metadata.versions.length > 0);
+    for (const v of metadata.versions) assert.match(v.sha, /^[0-9a-f]{40}$/);
+  });
+
+  it('lists versions newest first, each a commit in this repository', () => {
+    const shas = parseYaml(readFileSync(new URL('metadata.yaml', root), 'utf8')).versions.map((v) => v.sha);
+    for (const sha of shas) assert.ok(isCommit(sha), `${sha} is not a commit here`);
+    assert.ok(newestFirst(shas), `versions are not newest first: ${shas.join(', ')}`);
+  });
+
+  it('rejects an older release listed above a newer one', () => {
+    // The first two commits that touched template.tpl, oldest last.
+    const [newer, older] = templateCommits().slice(-2).reverse();
+    assert.ok(newestFirst([newer, older]));
+    assert.ok(!newestFirst([older, newer]));
+  });
+
+
+
   it('ships the Apache 2.0 license with the copyright line filled in', () => {
     const license = readFileSync(new URL('LICENSE', root), 'utf8');
     assert.match(license, /Apache License\s+Version 2\.0, January 2004/);
