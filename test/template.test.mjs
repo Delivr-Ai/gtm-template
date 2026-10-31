@@ -129,6 +129,15 @@ describe('the harness itself', () => {
 });
 
 describe('gallery files', () => {
+  it('has gallery metadata: https homepage and docs, newest-first versions with full commit SHAs', () => {
+    const metadata = parseYaml(readFileSync(new URL('metadata.yaml', root), 'utf8'));
+    assert.match(metadata.homepage, /^https:\/\//);
+    assert.match(metadata.documentation, /^https:\/\//);
+    assert.ok(Array.isArray(metadata.versions) && metadata.versions.length > 0);
+    for (const v of metadata.versions) assert.match(v.sha, /^[0-9a-f]{40}$/);
+  });
+
+
   it('ships the Apache 2.0 license with the copyright line filled in', () => {
     const license = readFileSync(new URL('LICENSE', root), 'utf8');
     assert.match(license, /Apache License\s+Version 2\.0, January 2004/);
