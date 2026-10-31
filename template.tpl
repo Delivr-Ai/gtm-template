@@ -116,24 +116,23 @@ if (!pixelId) {
   return;
 }
 
-const url = 'https://cdn.delivr.ai/pixels/' + encodeUriComponent(pixelId) + '/p.js';
-
 function noop() {}
 
 // The cache token keeps one script element per pixel however often the tag
 // fires or consent is re-granted.
-function load(onSuccess, onFailure) {
+function loadPixel(id, onSuccess, onFailure) {
+  const url = 'https://cdn.delivr.ai/pixels/' + encodeUriComponent(id) + '/p.js';
   injectScript(url, function () {
     logToConsole(LOG_PREFIX + 'loaded ' + url);
     onSuccess();
   }, function () {
     logToConsole(LOG_PREFIX + 'failed to load ' + url);
     onFailure();
-  }, 'delivr-pixel-' + pixelId);
+  }, 'delivr-pixel-' + id);
 }
 
 if (data.respectConsent === false) {
-  load(data.gtmOnSuccess, data.gtmOnFailure);
+  loadPixel(pixelId, data.gtmOnSuccess, data.gtmOnFailure);
   return;
 }
 
@@ -141,11 +140,16 @@ const consentType = data.consentType || 'ad_storage';
 
 // Every Delivr tag on the page shares one flag, so it is granted only while
 // every consent type any of them requires is granted.
-const requiredTypes = templateStorage.getItem('consentTypes') || [];
-if (requiredTypes.indexOf(consentType) === -1) {
-  requiredTypes.push(consentType);
-  templateStorage.setItem('consentTypes', requiredTypes);
+// Whichever tag sees the last type granted loads every waiting pixel.
+function remember(key, value) {
+  const values = templateStorage.getItem(key) || [];
+  if (values.indexOf(value) === -1) {
+    values.push(value);
+    templateStorage.setItem(key, values);
+  }
 }
+remember('consentTypes', consentType);
+remember('pixelIds', pixelId);
 
 function pageGranted() {
   const types = templateStorage.getItem('consentTypes') || [];
@@ -164,7 +168,7 @@ const granted = pageGranted();
 setInWindow('__delivrPixelConsent', granted, true);
 
 if (granted) {
-  load(data.gtmOnSuccess, data.gtmOnFailure);
+  loadPixel(pixelId, data.gtmOnSuccess, data.gtmOnFailure);
 } else {
   logToConsole(LOG_PREFIX + 'waiting for consent');
   data.gtmOnSuccess();
@@ -176,7 +180,10 @@ addConsentListener(consentType, function (type, nowGranted) {
   setInWindow('__delivrPixelConsent', allGranted, true);
   callInWindow('PixelSDK.setConsent', allGranted);
   if (allGranted) {
-    load(noop, noop);
+    const ids = templateStorage.getItem('pixelIds') || [];
+    for (let i = 0; i < ids.length; i++) {
+      loadPixel(ids[i], noop, noop);
+    }
   }
 });
 
@@ -613,6 +620,29 @@ scenarios:
 
     assertThat(flag).isFalse();
     assertThat(sdkConsent).isFalse();
+- name: The last grant loads every waiting pixel, not only its own tag's
+  code: |-
+    const states = {ad_storage: false, analytics_storage: true};
+    const listeners = {};
+    const loaded = [];
+    mock('isConsentGranted', function (type) { return states[type]; });
+    mock('addConsentListener', function (type, fn) { listeners[type] = fn; });
+    mock('setInWindow', function () {});
+    mock('callInWindow', function () {});
+    mock('injectScript', function (url, onSuccess) {
+      loaded.push(url);
+      onSuccess();
+    });
+
+    runCode(mockData);
+    runCode({pixelId: '6f01f886-7e01-4f4b-8c78-09051afd02c8', respectConsent: true, consentType: 'analytics_storage'});
+    states.ad_storage = true;
+    listeners.ad_storage('ad_storage', true);
+
+    assertThat(loaded).isEqualTo([
+      'https://cdn.delivr.ai/pixels/6f01f886-7e01-4f4b-8c78-09051afd02c7/p.js',
+      'https://cdn.delivr.ai/pixels/6f01f886-7e01-4f4b-8c78-09051afd02c8/p.js'
+    ]);
 - name: A tag registered while another type is denied waits
   code: |-
     const states = {ad_storage: false, analytics_storage: true};
